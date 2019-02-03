@@ -18,6 +18,8 @@ const (
 	bridgePrefix     = "ovsbr-"
 	containerEthName = "eth"
 
+	optionKey = "com.docker.network.generic"
+
 	mtuOption           = "net.gopher.ovs.bridge.mtu"
 	modeOption          = "net.gopher.ovs.bridge.mode"
 	bridgeNameOption    = "net.gopher.ovs.bridge.name"
@@ -244,8 +246,12 @@ func truncateID(id string) string {
 func getBridgeMTU(r *dknet.CreateNetworkRequest) (int, error) {
 	bridgeMTU := defaultMTU
 	if r.Options != nil {
-		if mtu, ok := r.Options[mtuOption].(int); ok {
-			bridgeMTU = mtu
+		optionObj := r.Options[optionKey]
+		if optionObj != nil {
+			option := optionObj.(map[string]interface{})
+			if mtu, ok := option[mtuOption].(int); ok {
+				bridgeMTU = mtu
+			}
 		}
 	}
 	return bridgeMTU, nil
@@ -254,8 +260,12 @@ func getBridgeMTU(r *dknet.CreateNetworkRequest) (int, error) {
 func getBridgeName(r *dknet.CreateNetworkRequest) (string, error) {
 	bridgeName := bridgePrefix + truncateID(r.NetworkID)
 	if r.Options != nil {
-		if name, ok := r.Options[bridgeNameOption].(string); ok {
-			bridgeName = name
+		optionObj := r.Options[optionKey]
+		if optionObj != nil {
+			option := optionObj.(map[string]interface{})
+			if name, ok := option[bridgeNameOption].(string); ok {
+				bridgeName = name
+			}
 		}
 	}
 	return bridgeName, nil
@@ -264,11 +274,15 @@ func getBridgeName(r *dknet.CreateNetworkRequest) (string, error) {
 func getBridgeMode(r *dknet.CreateNetworkRequest) (string, error) {
 	bridgeMode := defaultMode
 	if r.Options != nil {
-		if mode, ok := r.Options[modeOption].(string); ok {
-			if _, isValid := validModes[mode]; !isValid {
-				return "", fmt.Errorf("%s is not a valid mode", mode)
+		optionObj := r.Options[optionKey]
+		if optionObj != nil {
+			option := optionObj.(map[string]interface{})
+			if mode, ok := option[modeOption].(string); ok {
+				if _, isValid := validModes[mode]; !isValid {
+					return "", fmt.Errorf("%s is not a valid mode", mode)
+				}
+				bridgeMode = mode
 			}
-			bridgeMode = mode
 		}
 	}
 	return bridgeMode, nil
@@ -313,8 +327,12 @@ func getGatewayIP(r *dknet.CreateNetworkRequest) (string, string, error) {
 
 func getBindInterface(r *dknet.CreateNetworkRequest) (string, error) {
 	if r.Options != nil {
-		if mode, ok := r.Options[bindInterfaceOption].(string); ok {
-			return mode, nil
+		optionObj := r.Options[optionKey]
+		if optionObj != nil {
+			option := optionObj.(map[string]interface{})
+			if mode, ok := option[bindInterfaceOption].(string); ok {
+				return mode, nil
+			}
 		}
 	}
 	// As bind interface is optional and has no default, don't return an error
