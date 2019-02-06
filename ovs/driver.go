@@ -6,7 +6,7 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/gopher-net/dknet"
+	dknet "github.com/docker/go-plugins-helpers/network"
 	"github.com/samalba/dockerclient"
 	"github.com/socketplane/libovsdb"
 	"github.com/vishvananda/netlink"
@@ -40,6 +40,7 @@ var (
 )
 
 type Driver struct {
+	name string
 	dknet.Driver
 	dockerer
 	ovsdber
@@ -117,9 +118,9 @@ func (d *Driver) DeleteNetwork(r *dknet.DeleteNetworkRequest) error {
 	return nil
 }
 
-func (d *Driver) CreateEndpoint(r *dknet.CreateEndpointRequest) error {
+func (d *Driver) CreateEndpoint(r *dknet.CreateEndpointRequest) (*dknet.CreateEndpointResponse, error) {
 	log.Debugf("Create endpoint request: %+v", r)
-	return nil
+	return nil, nil
 }
 
 func (d *Driver) DeleteEndpoint(r *dknet.DeleteEndpointRequest) error {
@@ -185,7 +186,17 @@ func (d *Driver) Leave(r *dknet.LeaveRequest) error {
 	return nil
 }
 
-func NewDriver() (*Driver, error) {
+func (d *Driver) ProgramExternalConnectivity(r *dknet.ProgramExternalConnectivityRequest) error {
+	log.Debugf("Program external connectivity request: %+v", r)
+	return nil
+}
+
+func (d *Driver) RevokeExternalConnectivity(r *dknet.RevokeExternalConnectivityRequest) error {
+	log.Debugf("Revoke external connectivity request: %+v", r)
+	return nil
+}
+
+func NewDriver(name string) (*Driver, error) {
 	docker, err := dockerclient.NewDockerClient("unix:///var/run/docker.sock", nil)
 	if err != nil {
 		return nil, fmt.Errorf("could not connect to docker: %s", err)
@@ -208,6 +219,7 @@ func NewDriver() (*Driver, error) {
 	}
 
 	d := &Driver{
+		name: name,
 		dockerer: dockerer{
 			client: docker,
 		},
