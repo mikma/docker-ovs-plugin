@@ -1,6 +1,7 @@
 {
 	"ImportPath": "github.com/gopher-net/docker-ovs-plugin",
-	"GoVersion": "go1.4.3",
+	"GoVersion": "go1.11",
+	"GodepVersion": "v80",
 	"Packages": [
 		"./..."
 	],
