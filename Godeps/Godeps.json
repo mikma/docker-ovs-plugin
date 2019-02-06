@@ -62,7 +62,7 @@
 		},
 		{
 			"ImportPath": "github.com/samalba/dockerclient",
-			"Rev": "82381805d3533c97cec74e1cc79b00ef45774571"
+			"Rev": "a3036261847103270e9f732509f43b5f98710ace"
 		},
 		{
 			"ImportPath": "github.com/socketplane/libovsdb",
@@ -72,6 +72,11 @@
 		{
 			"ImportPath": "github.com/vishvananda/netlink",
 			"Rev": "a57a12c1b1d8aa37cf2f9da4fa7657b1f1fed88c"
+		},
+		{
+			"ImportPath": "github.com/docker/go-units",
+			"Comment": "v0.3.3-2-g2fb04c6",
+			"Rev": "2fb04c6466a548a03cb009c5569ee1ab1e35398e"
 		}
 	]
 }
