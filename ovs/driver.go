@@ -2,7 +2,8 @@ package ovs
 
 import (
 	"fmt"
-	"strings"
+	"net"
+	"strconv"
 	"time"
 
 	log "github.com/Sirupsen/logrus"
@@ -59,32 +60,97 @@ type NetworkState struct {
 	FlatBindInterface string
 }
 
+func (d *Driver) findNetworkState(id string) (*NetworkState, error) {
+	ns, found := d.networks[id]
+	if found {
+		return ns, nil
+	}
+
+	if d.dockerer.client == nil {
+		return nil, fmt.Errorf("Docker client disabled; unable to get network state")
+	}
+
+
+	network, err := d.dockerer.client.InspectNetwork(id)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debugf("findNetworkState: %+v", network)
+
+	if network.Driver != d.name {
+		return nil, fmt.Errorf("Not our network")
+	}
+
+	gateway := ""
+
+	for _, value := range network.IPAM.Config {
+		ip := net.ParseIP(value.Gateway)
+		if ip.To4() != nil {
+			gateway = value.Gateway
+			break
+		}
+	}
+
+	return d.setupNetworkState(id, network.Options, gateway)
+}
+
 func (d *Driver) CreateNetwork(r *dknet.CreateNetworkRequest) error {
 	log.Debugf("Create network request: %+v", r)
+	// FIXME
+	_, err := d.setupNetworkState(r.NetworkID, stringOptions(r), r.IPv4Data[0].Gateway)
+	return err
+}
 
-	bridgeName, err := getBridgeName(r)
+// By bboreham from https://github.com/weaveworks/weave/
+//
+// Deal with excessively-generic way the options get decoded from JSON
+func stringOptions(create *dknet.CreateNetworkRequest) map[string]string {
+	if create.Options != nil {
+		if data, found := create.Options[optionKey]; found {
+			if options, ok := data.(map[string]interface{}); ok {
+				out := make(map[string]string, len(options))
+				for key, value := range options {
+					if str, ok := value.(string); ok {
+						out[key] = str
+					}
+				}
+				return out
+			}
+		}
+	}
+	return nil
+}
+
+func (d *Driver) setupNetworkState(id string, options map[string]string, gateway string) (*NetworkState, error) {
+	bridgeName, err := getBridgeName(id, options)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	mtu, err := getBridgeMTU(r)
+	mtu, err := getBridgeMTU(options)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	mode, err := getBridgeMode(r)
+	mode, err := getBridgeMode(options)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	gateway, mask, err := getGatewayIP(r)
-	if err != nil {
-		return err
-	}
+	// FIXME
+	mask := "24"
 
-	bindInterface, err := getBindInterface(r)
+/*
+	gateway, mask, err := getGatewayIP(options)
 	if err != nil {
-		return err
+		return nil, err
+	}
+*/
+
+	bindInterface, err := getBindInterface(options)
+	if err != nil {
+		return nil, err
 	}
 
 	ns := &NetworkState{
@@ -95,14 +161,14 @@ func (d *Driver) CreateNetwork(r *dknet.CreateNetworkRequest) error {
 		GatewayMask:       mask,
 		FlatBindInterface: bindInterface,
 	}
-	d.networks[r.NetworkID] = ns
+	d.networks[id] = ns
 
-	log.Debugf("Initializing bridge for network %s", r.NetworkID)
-	if err := d.initBridge(r.NetworkID); err != nil {
-		delete(d.networks, r.NetworkID)
-		return err
+	log.Debugf("Initializing bridge for network %s", id)
+	if err := d.initBridge(id); err != nil {
+		delete(d.networks, id)
+		return nil, err
 	}
-	return nil
+	return ns, nil
 }
 
 func (d *Driver) DeleteNetwork(r *dknet.DeleteNetworkRequest) error {
@@ -148,7 +214,13 @@ func (d *Driver) Join(r *dknet.JoinRequest) (*dknet.JoinResponse, error) {
 		log.Warnf("Error enabling  Veth local iface: [ %v ]", localVethPair)
 		return nil, err
 	}
-	bridgeName := d.networks[r.NetworkID].BridgeName
+
+	ns, err := d.findNetworkState(r.NetworkID)
+	if err != nil {
+		log.Errorf("no network state [ %s ]", r.NetworkID)
+		return nil, err
+	}
+	bridgeName := ns.BridgeName
 	err = d.addOvsVethPort(bridgeName, localVethPair.Name, 0)
 	if err != nil {
 		log.Errorf("error attaching veth [ %s ] to bridge [ %s ]", localVethPair.Name, bridgeName)
@@ -162,7 +234,7 @@ func (d *Driver) Join(r *dknet.JoinRequest) (*dknet.JoinResponse, error) {
 			SrcName:   localVethPair.PeerName,
 			DstPrefix: containerEthName,
 		},
-		Gateway: d.networks[r.NetworkID].Gateway,
+		Gateway: ns.Gateway,
 	}
 	log.Debugf("Join endpoint %s:%s to %s", r.NetworkID, r.EndpointID, r.SandboxKey)
 	return res, nil
@@ -255,52 +327,35 @@ func truncateID(id string) string {
 	return id[:5]
 }
 
-func getBridgeMTU(r *dknet.CreateNetworkRequest) (int, error) {
+func getBridgeMTU(options map[string]string) (int, error) {
 	bridgeMTU := defaultMTU
-	if r.Options != nil {
-		optionObj := r.Options[optionKey]
-		if optionObj != nil {
-			option := optionObj.(map[string]interface{})
-			if mtu, ok := option[mtuOption].(int); ok {
-				bridgeMTU = mtu
-			}
-		}
+	if mtu, err := strconv.Atoi(options[mtuOption]); err == nil {
+		bridgeMTU = mtu
 	}
 	return bridgeMTU, nil
 }
 
-func getBridgeName(r *dknet.CreateNetworkRequest) (string, error) {
-	bridgeName := bridgePrefix + truncateID(r.NetworkID)
-	if r.Options != nil {
-		optionObj := r.Options[optionKey]
-		if optionObj != nil {
-			option := optionObj.(map[string]interface{})
-			if name, ok := option[bridgeNameOption].(string); ok {
-				bridgeName = name
-			}
-		}
+func getBridgeName(id string, options map[string]string) (string, error) {
+	bridgeName := bridgePrefix + truncateID(id)
+	if name, ok := options[bridgeNameOption]; ok {
+		bridgeName = name
 	}
 	return bridgeName, nil
 }
 
-func getBridgeMode(r *dknet.CreateNetworkRequest) (string, error) {
+func getBridgeMode(options map[string]string) (string, error) {
 	bridgeMode := defaultMode
-	if r.Options != nil {
-		optionObj := r.Options[optionKey]
-		if optionObj != nil {
-			option := optionObj.(map[string]interface{})
-			if mode, ok := option[modeOption].(string); ok {
-				if _, isValid := validModes[mode]; !isValid {
-					return "", fmt.Errorf("%s is not a valid mode", mode)
-				}
-				bridgeMode = mode
-			}
+	if mode, ok := options[modeOption]; ok {
+		if _, isValid := validModes[mode]; !isValid {
+			return "", fmt.Errorf("%s is not a valid mode", mode)
 		}
+		bridgeMode = mode
 	}
 	return bridgeMode, nil
 }
 
-func getGatewayIP(r *dknet.CreateNetworkRequest) (string, string, error) {
+func getGatewayIP(options map[string]string) (string, string, error) {
+/*
 	// FIXME: Dear future self, I'm sorry for leaving you with this mess, but I want to get this working ASAP
 	// This should be an array
 	// We need to handle case where we have
@@ -335,17 +390,13 @@ func getGatewayIP(r *dknet.CreateNetworkRequest) (string, string, error) {
 		return "", "", fmt.Errorf("Cannot split gateway IP address")
 	}
 	return parts[0], parts[1], nil
+*/
+	return "", "", fmt.Errorf("FIXME")
 }
 
-func getBindInterface(r *dknet.CreateNetworkRequest) (string, error) {
-	if r.Options != nil {
-		optionObj := r.Options[optionKey]
-		if optionObj != nil {
-			option := optionObj.(map[string]interface{})
-			if mode, ok := option[bindInterfaceOption].(string); ok {
-				return mode, nil
-			}
-		}
+func getBindInterface(options map[string]string) (string, error) {
+	if mode, ok := options[bindInterfaceOption]; ok {
+		return mode, nil
 	}
 	// As bind interface is optional and has no default, don't return an error
 	return "", nil
